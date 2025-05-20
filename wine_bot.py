@@ -174,7 +174,7 @@ async def main():
 
 
 async def ask_country_preference(query):
-    keyboard = [
+    keyboard1 = [
         [InlineKeyboardButton("🇫🇷 France", callback_data="country_france")],
         [InlineKeyboardButton("🇮🇹 Italy", callback_data="country_italy")],
         [InlineKeyboardButton("🇪🇸 Spain", callback_data="country_spain")],
@@ -187,7 +187,7 @@ async def ask_country_preference(query):
         parse_mode="Markdown"
     )
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def help_command1(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("ℹ️ I help you choose wines by taste, purpose, and budget. Use /start to begin.")
 
 
