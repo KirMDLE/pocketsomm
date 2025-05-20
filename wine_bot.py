@@ -187,7 +187,7 @@ async def ask_country_preference(query):
         parse_mode="Markdown"
     )
 
-async def help_command1(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def help_command21(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("ℹ️ I help you choose wines by taste, purpose, and budget. Use /start to begin.")
 
 
