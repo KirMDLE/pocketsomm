@@ -172,5 +172,26 @@ async def main():
 
     await app.run_polling()
 
+
+async def ask_country_preference(query):
+    keyboard = [
+        [InlineKeyboardButton("🇫🇷 France", callback_data="country_france")],
+        [InlineKeyboardButton("🇮🇹 Italy", callback_data="country_italy")],
+        [InlineKeyboardButton("🇪🇸 Spain", callback_data="country_spain")],
+        [InlineKeyboardButton("🌎 Any", callback_data="country_any")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_to_type")],
+    ]
+    await query.edit_message_text(
+        "🌍 *Do you prefer wines from a specific country?*",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("ℹ️ I help you choose wines by taste, purpose, and budget. Use /start to begin.")
+
+
+
+
 if __name__ == "__main__":
     asyncio.run(main())
