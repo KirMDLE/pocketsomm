@@ -2,30 +2,19 @@ import asyncio
 import os
 import random
 import aiohttp
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputMediaPhoto
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
-from sqlmodel import SQLModel, Field, Session, create_engine, select
-from typing import Optional
+from telegram import (
+    InlineKeyboardButton, InlineKeyboardMarkup, Update, InputMediaPhoto
+)
+from telegram.ext import (
+    Application, CallbackQueryHandler, CommandHandler,
+    ContextTypes
+)
+import nest_asyncio
 
-TOKEN = ""
+nest_asyncio.apply()
+
 os.environ['TZ'] = 'Europe/Moscow'
-
-class FavoriteWine(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: int
-    wine_name: str
-    wine_link: str
-    image_url: str
-    rating: float
-    price: float
-    region: str
-    country: str
-
-DATABASE_URL = "sqlite:///./favorites.db"
-engine = create_engine(DATABASE_URL, echo=False)
-
-def create_db_and_tables():
-    SQLModel.metadata.create_all(engine)
+TOKEN = ""  # Insert your bot token here
 
 CATEGORIES = {
     "reds": {
@@ -54,10 +43,7 @@ CATEGORIES = {
     },
 }
 
-user_wine_cache = {}
-
-def wine_keyboard(wine_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton(text="💖 В избранное", callback_data=f"fav:{wine_id}")]])
+user_favorites = {}  # user_id: set of wine IDs
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -76,30 +62,40 @@ async def not_implemented(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    user_id = query.from_user.id
     data = query.data
 
     if data == "start_questionnaire":
         context.user_data.clear()
         await ask_price_preference(query)
+
     elif data.startswith("price_"):
         context.user_data["price"] = data
         await ask_purpose(query)
+
     elif data.startswith("purpose_"):
         context.user_data["purpose"] = data
         await ask_wine_type(query)
+
     elif data.startswith("type_"):
         context.user_data["type"] = data
         await suggest_wine(query, context)
-    elif data.startswith("fav:"):
-        await add_to_favorites(update, context)
+
     elif data == "back_to_price":
         await ask_price_preference(query)
+
     elif data == "back_to_purpose":
         await ask_purpose(query)
-    elif data == "back_to_type":
-        await ask_wine_type(query)
-    elif data == "not_implemented":
-        await not_implemented(update, context)
+
+    elif data.startswith("fav_add:"):
+        wine_id = int(data.split(":")[1])
+        user_favorites.setdefault(user_id, set()).add(wine_id)
+        await query.edit_message_reply_markup(reply_markup=wine_keyboard(wine_id, user_id))
+
+    elif data.startswith("fav_remove:"):
+        wine_id = int(data.split(":")[1])
+        user_favorites.setdefault(user_id, set()).discard(wine_id)
+        await query.edit_message_reply_markup(reply_markup=wine_keyboard(wine_id, user_id))
 
 async def ask_price_preference(query):
     keyboard = [
@@ -138,106 +134,94 @@ async def ask_wine_type(query):
         [InlineKeyboardButton("Port 🍷🔥", callback_data="type_port")],
         [InlineKeyboardButton("🔙 Back", callback_data="back_to_purpose")],
     ]
-    descriptions = "\n\n".join([f"*{name.capitalize()}*: {info['description']}" for name, info in CATEGORIES.items()])
+
+    descriptions = "\n\n".join([
+        f"*{name.capitalize()}*: {info['description']}"
+        for name, info in CATEGORIES.items()
+    ])
+
     await query.edit_message_text(
         f"🎨 *Choose your wine preference:*\n\n{descriptions}",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
 
+def wine_keyboard(wine_id: int, user_id: int) -> InlineKeyboardMarkup:
+    favs = user_favorites.get(user_id, set())
+    if wine_id in favs:
+        button = InlineKeyboardButton("❌ Remove from Favorites", callback_data=f"fav_remove:{wine_id}")
+    else:
+        button = InlineKeyboardButton("💖 Add to Favorites", callback_data=f"fav_add:{wine_id}")
+    return InlineKeyboardMarkup([[button]])
+
 async def suggest_wine(query, context: ContextTypes.DEFAULT_TYPE):
     wine_type = context.user_data.get("type", "type_reds").replace("type_", "")
     wine_data = CATEGORIES.get(wine_type)
+
     if not wine_data:
         await query.edit_message_text("Error: wine category not found.")
         return
+
     url = wine_data["url"]
+
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
             wines = await resp.json()
+
     if not wines:
         await query.edit_message_text("Sorry, no wines found for your preferences.")
         return
-    wine = random.choice(wines)
-    user_id = query.from_user.id
-    user_wine_cache[user_id] = wines
 
-    name = wine.get("wine") or wine.get("name") or "Unnamed"
+    wine = random.choice(wines)
+    wine_id = wines.index(wine)
+    name = wine.get("wine", "Unnamed")
     winery = wine.get("winery", "Unknown")
     rating = wine.get("rating", {}).get("average", "No rating")
-    image_url = wine.get("image") or wine.get("thumb")
-    price = wine.get("price", 0)
-    region = wine.get("region", "")
-    country = wine.get("country", "")
+    image_url = wine.get("image")
+
     text = f"🍷 *{name}*\n🏭 Winery: {winery}\n⭐ Rating: {rating}\n\nHope this is what you're looking for!"
-    wine_id = wines.index(wine)
+
     if image_url:
         await query.edit_message_media(
             InputMediaPhoto(media=image_url, caption=text, parse_mode="Markdown")
         )
     else:
         await query.edit_message_text(text, parse_mode="Markdown")
-    await query.edit_message_reply_markup(reply_markup=wine_keyboard(wine_id))
 
-async def add_to_favorites(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    data = query.data
-    wine_id = int(data.split(":")[1])
-    wines = user_wine_cache.get(user_id)
-    if not wines or wine_id >= len(wines):
-        await query.answer("Wine not found in cache.", show_alert=True)
-        return
-    wine = wines[wine_id]
-    name = wine.get("wine") or wine.get("name") or "Unnamed"
-    link = wine.get("link") or ""
-    image_url = wine.get("image") or wine.get("thumb") or ""
-    rating = wine.get("rating", {}).get("average", 0)
-    price = wine.get("price", 0)
-    region = wine.get("region", "")
-    country = wine.get("country", "")
-    with Session(engine) as session:
-        exists = session.exec(
-            select(FavoriteWine).where(
-                (FavoriteWine.user_id == user_id) & (FavoriteWine.wine_name == name)
-            )
-        ).first()
-        if exists:
-            await query.answer("Already in favorites!", show_alert=True)
-            return
-        fav = FavoriteWine(
-            user_id=user_id,
-            wine_name=name,
-            wine_link=link,
-            image_url=image_url,
-            rating=rating,
-            price=price,
-            region=region,
-            country=country
-        )
-        session.add(fav)
-        session.commit()
-    await query.answer("Added to favorites! 💖", show_alert=True)
+    await query.edit_message_reply_markup(reply_markup=wine_keyboard(wine_id, query.from_user.id))
 
-async def favorites(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    with Session(engine) as session:
-        favs = session.exec(select(FavoriteWine).where(FavoriteWine.user_id == user_id)).all()
+async def show_favorites(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    favs = user_favorites.get(user_id, set())
     if not favs:
         await update.message.reply_text("You have no favorite wines yet.")
         return
-    texts = []
-    for f in favs:
-        texts.append(f"🍷 *{f.wine_name}*\nPrice: ${f.price}\nRegion: {f.region}\nCountry: {f.country}\nRating: {f.rating}\n[Link]({f.wine_link})\n")
-    await update.message.reply_text("\n\n".join(texts), parse_mode="Markdown")
 
-def main():
-    create_db_and_tables()
+    message_lines = []
+    for wine_type, category in CATEGORIES.items():
+        async with aiohttp.ClientSession() as session:
+            async with session.get(category["url"]) as resp:
+                wines = await resp.json()
+        for wine_id in favs:
+            if wine_id < len(wines) and wine_type == context.user_data.get("type", "reds"):
+                wine = wines[wine_id]
+                name = wine.get("wine", "Unnamed")
+                message_lines.append(f"🍷 {name} ({wine_type.capitalize()})")
+
+    if not message_lines:
+        await update.message.reply_text("No favorite wines found in your current preferences.")
+        return
+
+    await update.message.reply_text("\n".join(message_lines))
+
+async def main():
     app = Application.builder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("favorites", favorites))
+    app.add_handler(CommandHandler("favorites", show_favorites))
     app.add_handler(CallbackQueryHandler(handle_callback))
-    app.run_polling()
+
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
